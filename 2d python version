@@ -1,0 +1,405 @@
+# press r to add a rocket to the sim, ',' to slow down time, '.' to speed it up and up and down arrow to change the thrust limiter on the rocket. 
+# Use 'q' and 'e' to switch between bodies
+
+import pygame
+import math
+
+print('startup')
+
+pygame.init()
+SCREEN_WIDTH = 1000
+SCREEN_HEIGHT = 560
+G_CONSTANT = 6.6743 * 10**-11
+PI = 3.1415926535
+cam_x = 0
+cam_y = 0
+cam_zoom = 1  # 0.8 ** 50
+no_of_ran_planets = 0
+FRAMERATE = 60
+seconds_per_frame = 1
+precision = 1
+dt = seconds_per_frame / (FRAMERATE * precision)
+gt = 0
+selected_object = -1
+timewarp = 1
+scr = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("Newtonian Physics Simulation version 2.0")
+clock = pygame.time.Clock()
+font_0 = pygame.font.SysFont('Ariel', 15)
+lines_to_draw = []
+running = True
+paused = False
+do_collision = True
+draw_grav_lines = False
+
+class OrbitalBody:
+    def __init__(self, x_pos, y_pos, x_spd, y_spd, mass, radius, colour, index):
+        self.x_pos = x_pos
+        self.y_pos = y_pos
+        # self.z_pos = z_pos
+        self.x_spd = x_spd
+        self.y_spd = y_spd
+        # self.z_spd = z_spd
+        self.mass = mass  # always store mass as an integer, there should be no need for floating point masses
+        self.radius = radius
+        self.area = PI * radius ** 2
+        self.colour = colour
+        self.index = index  # each object is given an index used for determining its own position in the list 'bodies'
+
+    def draw(self):
+        radius = self.radius * cam_zoom
+        x_pos = (self.x_pos * cam_zoom) - cam_x + SCREEN_WIDTH // 2
+        y_pos = (self.y_pos * cam_zoom) - cam_y + SCREEN_HEIGHT // 2
+
+        if x_pos + radius >= 0 and x_pos - radius <= SCREEN_WIDTH and y_pos + radius >= 0 and \
+                y_pos - radius <= SCREEN_HEIGHT:
+            pygame.draw.circle(scr, self.colour, (x_pos, y_pos), radius)
+
+    def move(self):
+        self.x_pos += self.x_spd * dt
+        self.y_pos += self.y_spd * dt
+
+    def do_gravity(self):
+        for body in bodies:
+            if body.index != self.index:
+                x_diff = body.x_pos - self.x_pos
+                y_diff = body.y_pos - self.y_pos
+                dist = math.sqrt(x_diff**2 + y_diff**2)
+                if dist != 0 and self.check_discrete_collision(dist, body):
+                    g_acceleration = (G_CONSTANT * body.mass) / dist**2
+                    angle = math.atan2(math.radians(y_diff), math.radians(x_diff))
+                    self.x_spd += g_acceleration * math.cos(angle) * dt
+                    self.y_spd += g_acceleration * math.sin(angle) * dt
+                    if self.index == selected_object and g_acceleration >= 1 and draw_grav_lines:
+                        line_thickness = int(g_acceleration ** 0.5)
+                        if line_thickness < 10:
+                            lines_to_draw.append([scr, (255, 255, 255),
+                                                  ((self.x_pos * cam_zoom) - cam_x + 500,
+                                                   (self.y_pos * cam_zoom) - cam_y + 280),
+                                                  ((body.x_pos * cam_zoom) - cam_x + 500,
+                                                   (body.y_pos * cam_zoom) - cam_y + 280),
+                                                  int(line_thickness * cam_zoom)])
+                        else:
+                            lines_to_draw.append([scr, (255, 255, 255),
+                                                  ((self.x_pos * cam_zoom) - cam_x + 500,
+                                                   (self.y_pos * cam_zoom) - cam_y + 280),
+                                                  ((body.x_pos * cam_zoom) - cam_x + 500,
+                                                   (body.y_pos * cam_zoom) - cam_y + 280),
+                                                  int(10 * cam_zoom)])
+
+    def check_discrete_collision(self, dist, body):
+        if dist <= self.radius + body.radius and do_collision:
+            self.do_collision(body)
+            return False
+        else:
+            return True
+            
+    def do_collision(self, body):
+        total_mass = self.mass + body.mass
+
+        x_diff = body.x_pos - self.x_pos
+        y_diff = body.y_pos - self.y_pos
+        self.x_pos += x_diff * body.mass / total_mass
+        self.y_pos += y_diff * body.mass / total_mass
+
+        self_x_momentum = self.mass * self.x_spd
+        self_y_momentum = self.mass * self.y_spd
+        body_x_momentum = body.mass * body.x_spd
+        body_y_momentum = body.mass * body.y_spd
+        self.x_spd = (self_x_momentum + body_x_momentum) / total_mass
+        self.y_spd = (self_y_momentum + body_y_momentum) / total_mass
+
+        self.area = body.area + self.area
+        self.radius = math.sqrt(self.area / PI)
+
+        self.mass = total_mass
+
+        global selected_object
+        index = body.index
+        bodies.pop(index)
+        for i in range(index, len(bodies)):
+            bodies[i].index -= 1
+        if index == selected_object:
+            selected_object = self.index
+
+class Triangle:
+    def __init__(self, side_len, x_pos, y_pos, rotation, colour, nose_len=0.577):
+        self.sd_len = side_len
+        self.x_pos = x_pos
+        self.y_pos = y_pos
+        self.rot = rotation % 360
+        self.colour = colour
+        self.nose_len = nose_len
+        self.verts = []
+        self.update_verts()
+
+    def draw(self):
+        for vert in self.verts:
+            if -self.sd_len <= vert[0] <= SCREEN_WIDTH + self.sd_len and \
+                    -self.sd_len <= vert[1] <= SCREEN_HEIGHT + self.sd_len:
+                pygame.draw.polygon(scr, self.colour, self.verts)
+                return
+
+    def rotate(self, degrees):
+        self.rot += degrees
+        self.rot %= 360
+
+    def set_rotatation(self, degrees):
+        self.rot = degrees % 360
+
+    def set_x(self, x):
+        self.x_pos = x
+
+    def set_y(self, y):
+        self.y_pos = y
+
+    def update_verts(self):
+        v_0 = [(self.sd_len*self.nose_len*math.cos(math.radians(self.rot))+self.x_pos)*cam_zoom-cam_x+SCREEN_WIDTH//2, 
+               (self.sd_len*self.nose_len*math.sin(math.radians(self.rot))+self.y_pos)*cam_zoom-cam_y+SCREEN_HEIGHT//2]
+
+        v_1 = [(self.sd_len*0.577*math.cos(math.radians(self.rot+120))+self.x_pos)*cam_zoom-cam_x+SCREEN_WIDTH//2, 
+               (self.sd_len*0.577*math.sin(math.radians(self.rot+120))+self.y_pos)*cam_zoom-cam_y+SCREEN_HEIGHT//2]
+
+        v_2 = [(self.sd_len*0.577*math.cos(math.radians(self.rot+240))+self.x_pos)*cam_zoom-cam_x+SCREEN_WIDTH//2,
+               (self.sd_len*0.577*math.sin(math.radians(self.rot+240))+self.y_pos)*cam_zoom-cam_y+SCREEN_HEIGHT//2]
+
+        self.verts = [v_0, v_1, v_2]
+
+    def set_nose_len(self, nose_len):
+        self.nose_len = nose_len
+
+class Rocket:
+    def __init__(self, x_pos, y_pos, x_spd, y_spd, rotation,
+                 acceleration=1.0, power=1, body_colour='white', flame_colour='yellow',
+                 body_side_len=100, flame_side_len=33):
+        self.x_spd = x_spd
+        self.y_spd = y_spd
+        self.accel = acceleration
+        self.power = power
+        self.bod = Triangle(body_side_len, x_pos, y_pos, rotation, body_colour, 0.7)
+        self.flm = Triangle(flame_side_len, 0, 0, 0, flame_colour, 1.5)
+        self.accelerating = False
+        self.update_flame_pos()
+
+    def draw(self):
+        self.bod.update_verts()
+        if self.accelerating and self.accel > 0:
+            self.update_flame_pos()
+            self.flm.draw()
+        self.accelerating = False
+        self.bod.draw()
+
+    def update_flame_pos(self):
+        self.flm.set_rotatation(self.bod.rot + 180)
+        self.flm.set_nose_len(0.3 * self.accel)
+        dist = 0.289 * (self.bod.sd_len + self.flm.sd_len)
+        self.flm.set_x(self.bod.x_pos + dist * math.cos(math.radians(self.flm.rot)))
+        self.flm.set_y(self.bod.y_pos + dist * math.sin(math.radians(self.flm.rot)))
+        self.flm.update_verts()
+
+    def turn(self, degrees):
+        self.bod.rotate(degrees)
+
+    def accelerate(self):
+        if self.accelerating:
+            self.x_spd += self.power * self.accel * math.cos(math.radians(self.bod.rot)) * dt
+            self.y_spd += self.power * self.accel * math.sin(math.radians(self.bod.rot)) * dt
+
+    def update_position(self):
+        self.do_gravity()
+        self.accelerate()
+        self.move()
+
+    def move(self):
+        new_x_pos = self.bod.x_pos + self.x_spd * dt
+        """if new_x_pos < 0:
+            new_x_pos = 0
+            self.x_spd = 0
+        elif new_x_pos > SCREEN_WIDTH:
+            new_x_pos = SCREEN_WIDTH
+            self.x_spd = 0"""
+        self.bod.set_x(new_x_pos)
+
+        new_y_pos = self.bod.y_pos + self.y_spd * dt
+        """if new_y_pos < 0:
+            new_y_pos = 0
+            self.y_spd = 0
+        elif new_y_pos > SCREEN_HEIGHT:
+            new_y_pos = SCREEN_HEIGHT
+            self.y_spd = 0"""
+        self.bod.set_y(new_y_pos)
+
+    def do_gravity(self):
+        for body in bodies:
+            x_diff = body.x_pos - self.bod.x_pos
+            y_diff = body.y_pos - self.bod.y_pos
+            dist = math.sqrt(x_diff**2 + y_diff**2)
+            if dist != 0:
+                g_acceleration = (G_CONSTANT * body.mass) / dist**2
+                angle = math.atan2(math.radians(y_diff), math.radians(x_diff))
+                self.x_spd += g_acceleration * math.cos(angle) * dt
+                self.y_spd += g_acceleration * math.sin(angle) * dt
+
+    def find_move_dir(self):
+        return math.atan2(math.radians(self.y_spd), math.radians(self.x_spd))
+
+ship = Rocket(0, 0, 0, 0, 0, 100, 1, body_side_len=100, flame_side_len=33)
+
+saves = [[OrbitalBody(-200, 0, 0, 75, 10**17, 25, 'white', 0), OrbitalBody(200, 0, 0, -75, 10**17, 25, 'yellow', 1),
+          OrbitalBody(0, 2000, 70, 0, 10**15, 10, 'green', 2), OrbitalBody(0, -2000, -70, 0, 10**15, 10, 'green', 3),
+          OrbitalBody(0, 2050, 105, 0, 10**12, 5, 'red', 4), OrbitalBody(0, -2050, -105, 0, 10**12, 5, 'red', 5),
+          OrbitalBody(0, 0, 0, 0, 0, 5, 'purple', 6)],
+
+         [OrbitalBody(0, 0, 0, 0, 2*10**30, 695700000, 'yellow', 0),
+          OrbitalBody(1.5*10**11, 0, 0, 3*10**4, 6*10**24, 6371000, 'green', 1)],
+
+         [OrbitalBody(-10**6, 0, 0, (2.5*10**4), 10**26, 10**4, 'cyan', 0),
+          OrbitalBody(10**6, 0, 0, -(2.5*10**4), 10**26, 10**4, 'yellow', 1)],
+
+         [OrbitalBody(0, 0, 0, 0, 10**20, 10**4, 'cyan', 0),
+          OrbitalBody(10**5, 0, 0, 250, 10**18.5, 10**3, 'yellow', 1)]]
+
+bodies = saves[0]
+
+def physics_update():  # updates all object values needed when the simulation is playing
+    if selected_object == -2:
+        ship.update_position()
+    for body in bodies:
+        body.do_gravity()
+    for body in bodies:
+        body.move()
+
+def draw_update():  # updates all object values needed when the simulation is paused
+    global cam_x, cam_y
+    if selected_object >= 0:
+        cam_x = bodies[selected_object].x_pos * cam_zoom
+        cam_y = bodies[selected_object].y_pos * cam_zoom
+    elif selected_object == -2:
+        cam_x = ship.bod.x_pos * cam_zoom
+        cam_y = ship.bod.y_pos * cam_zoom
+        ship.draw()
+    for body in bodies:
+        body.draw()
+    for line in lines_to_draw:
+        pygame.draw.line(line[0], line[1], line[2], line[3], line[4])
+
+def show_ui(game_time):
+    timewarp_info = font_0.render('Timewarp: ' + str(timewarp), True, (255, 255, 255))
+    time_info = font_0.render('Time: ' + str((math.floor(game_time) * seconds_per_frame) // FRAMERATE) + 's',
+                              True, (255, 255, 255))
+    scr.blit(timewarp_info, (5, 5))
+    scr.blit(time_info, (5, 20))
+    if selected_object == -2:
+        throttle_info = font_0.render('Thrust limiter: ' + str(ship.accel) + '%', True, (255, 255, 255))
+        speed_info = font_0.render('Speed: ' + str(round(math.hypot(ship.x_spd, ship.y_spd), 2)) + 'm/s',
+                                   True, (255, 255, 255))
+        scr.blit(throttle_info, (5, 35))
+        scr.blit(speed_info, (5, 50))
+        prograde_angle = ship.find_move_dir()
+        pygame.draw.line(scr, 'green', (SCREEN_WIDTH - 35, 35),  # This line shows the direction that the ship is moving
+                         (SCREEN_WIDTH - 35 + 15 * math.cos(prograde_angle),
+                          35 + 15 * math.sin(prograde_angle)))
+        pygame.draw.line(scr, 'white', (SCREEN_WIDTH - 35, 35),  # This line shows the direction the ship is pointing
+                         (SCREEN_WIDTH - 35 + 25 * math.cos(math.radians(ship.bod.rot)),
+                          35 + 25 * math.sin(math.radians(ship.bod.rot))))
+        pygame.draw.circle(scr, 'white', (SCREEN_WIDTH - 35, 35), 5)
+
+while running:
+
+    mouse = pygame.mouse.get_pos()
+    mouse_x = mouse[0]
+    mouse_y = mouse[1]
+    mouse_x_real = mouse[0] * cam_zoom
+    mouse_y_real = mouse[1] * cam_zoom  # both of these mouse_x/y variables store the mouse's position in space
+
+    for ev in pygame.event.get():
+        if ev.type == pygame.QUIT:
+            running = False
+
+        if ev.type == pygame.MOUSEBUTTONDOWN:
+            if ev.button == 4:
+                cam_zoom *= 1.25
+                cam_x *= 1.25
+                cam_y *= 1.25
+            if ev.button == 5:
+                cam_zoom *= 0.8
+                cam_x *= 0.8
+                cam_y *= 0.8
+
+        if ev.type == pygame.KEYDOWN:
+            if ev.key == pygame.K_e:
+                selected_object += 1
+                if selected_object >= len(bodies):
+                    selected_object = 0
+            if ev.key == pygame.K_q:
+                selected_object -= 1
+                if selected_object < 0:
+                    selected_object = len(bodies) - 1
+            if ev.key == pygame.K_r:
+                if selected_object == -2:
+                    selected_object = -1
+                else:
+                    selected_object = -2
+                    ship.bod.set_x(cam_x / cam_zoom)
+                    ship.bod.set_y(cam_y / cam_zoom)
+                    ship.x_spd = 0
+                    ship.y_spd = 0
+                    ship.bod.rot = 0
+            if ev.key == pygame.K_PERIOD:
+                if paused:
+                    timewarp = 1
+                    paused = False
+                else:
+                    timewarp *= 2
+            if ev.key == pygame.K_COMMA:
+                if timewarp != 1 and type(timewarp) == int:
+                    timewarp //= 2
+                else:
+                    paused = True
+                    timewarp = 'Paused'
+
+    keys = pygame.key.get_pressed()
+    cam_move_dt = dt * precision / seconds_per_frame
+    if keys[pygame.K_w]:
+        if selected_object == -2 and not paused:
+            ship.accelerating = True
+        else:
+            cam_y -= 600 * cam_move_dt
+            selected_object = -1
+    if keys[pygame.K_a]:
+        if selected_object == -2 and not paused:
+            ship.bod.rotate(-2 * timewarp)
+        else:
+            cam_x -= 600 * cam_move_dt
+            selected_object = -1
+    if keys[pygame.K_s]:
+        if not(selected_object == -2 and not paused):
+            cam_y += 600 * cam_move_dt
+            selected_object = -1
+    if keys[pygame.K_d]:
+        if selected_object == -2 and not paused:
+            ship.bod.rotate(2 * timewarp)
+        else:
+            cam_x += 600 * cam_move_dt
+            selected_object = -1
+    if keys[pygame.K_UP] and ship.accel < 100 and selected_object == -2 and not paused:
+        ship.accel += 0.5 * timewarp
+    if keys[pygame.K_DOWN] and ship.accel > 0 and selected_object == -2 and not paused:
+        ship.accel -= 0.5 * timewarp
+
+    scr.fill("black")
+
+    # RENDER YOUR GAME HERE
+    if not paused:
+        for no_hidden_frames in range(timewarp * precision):
+            lines_to_draw = []
+            physics_update()
+            gt += 1 / precision
+    draw_update()
+    show_ui(gt)
+
+    pygame.display.flip()
+
+    clock.tick(FRAMERATE)
+
+pygame.quit()
