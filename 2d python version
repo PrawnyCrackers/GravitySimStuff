@@ -60,32 +60,33 @@ class OrbitalBody:
         self.y_pos += self.y_spd * dt
 
     def do_gravity(self):
+        x_accel = 0
+        y_accel = 0
         for body in bodies:
             if body.index != self.index:
                 x_diff = body.x_pos - self.x_pos
                 y_diff = body.y_pos - self.y_pos
-                dist = math.sqrt(x_diff**2 + y_diff**2)
+                dist_squ = x_diff**2 + y_diff**2
+                dist = math.sqrt(dist_squ)
                 if dist != 0 and self.check_discrete_collision(dist, body):
-                    g_acceleration = (G_CONSTANT * body.mass) / dist**2
-                    angle = math.atan2(math.radians(y_diff), math.radians(x_diff))
-                    self.x_spd += g_acceleration * math.cos(angle) * dt
-                    self.y_spd += g_acceleration * math.sin(angle) * dt
-                    if self.index == selected_object and g_acceleration >= 1 and draw_grav_lines:
-                        line_thickness = int(g_acceleration ** 0.5)
-                        if line_thickness < 10:
-                            lines_to_draw.append([scr, (255, 255, 255),
-                                                  ((self.x_pos * cam_zoom) - cam_x + 500,
-                                                   (self.y_pos * cam_zoom) - cam_y + 280),
-                                                  ((body.x_pos * cam_zoom) - cam_x + 500,
-                                                   (body.y_pos * cam_zoom) - cam_y + 280),
-                                                  int(line_thickness * cam_zoom)])
-                        else:
-                            lines_to_draw.append([scr, (255, 255, 255),
-                                                  ((self.x_pos * cam_zoom) - cam_x + 500,
-                                                   (self.y_pos * cam_zoom) - cam_y + 280),
-                                                  ((body.x_pos * cam_zoom) - cam_x + 500,
-                                                   (body.y_pos * cam_zoom) - cam_y + 280),
-                                                  int(10 * cam_zoom)])
+                    g_accel = (G_CONSTANT * body.mass) / dist_squ
+                    accel_const = (g_accel / dist) * dt
+                    x_accel += x_diff * accel_const
+                    y_accel += y_diff * accel_const
+        self.x_spd += x_accel
+        self.y_spd += y_accel
+        tot_accel = math.sqrt(x_accel**2 + y_accel**2)
+        if tot_accel == 0:
+            tot_accel += 0.00001
+        x_accel /= tot_accel
+        y_accel /= tot_accel
+        if self.index == selected_object and draw_grav_lines:
+            lines_to_draw.append([scr, (255, 255, 255),
+                                  ((self.x_pos * cam_zoom) - cam_x + 500,
+                                   (self.y_pos * cam_zoom) - cam_y + 280),
+                                  (((self.x_pos + x_accel * 2 * self.radius) * cam_zoom) - cam_x + 500,
+                                   ((self.y_pos + y_accel * 2 * self.radius) * cam_zoom) - cam_y + 280),
+                                  1])
 
     def check_discrete_collision(self, dist, body):
         if dist <= self.radius + body.radius and do_collision:
@@ -257,9 +258,14 @@ saves = [[OrbitalBody(-200, 0, 0, 75, 10**17, 25, 'white', 0), OrbitalBody(200, 
           OrbitalBody(10**6, 0, 0, -(2.5*10**4), 10**26, 10**4, 'yellow', 1)],
 
          [OrbitalBody(0, 0, 0, 0, 10**20, 10**4, 'cyan', 0),
-          OrbitalBody(10**5, 0, 0, 250, 10**18.5, 10**3, 'yellow', 1)]]
+          OrbitalBody(10**5, 0, 0, 250, 10**18.5, 10**3, 'yellow', 1)],
 
-bodies = saves[0]
+         [OrbitalBody(-200, 0, 0, -300, 10**17, 25, 'white', 0), OrbitalBody(0, 200, 180, 80, 10**17, 25, 'yellow', 1),
+          OrbitalBody(0, 2000, 70, 0, 10**15, 10, 'green', 2), OrbitalBody(0, -2000, -70, 0, 10**15, 10, 'green', 3),
+          OrbitalBody(0, 2050, 105, 0, 10**12, 5, 'red', 4), OrbitalBody(0, -2050, -105, 0, 10**12, 5, 'red', 5),
+          OrbitalBody(200, 0, 0, -150, 10**17.5, 30, 'purple', 6)]]
+
+bodies = saves[4]
 
 def physics_update():  # updates all object values needed when the simulation is playing
     if selected_object == -2:
@@ -272,8 +278,10 @@ def physics_update():  # updates all object values needed when the simulation is
 def draw_update():  # updates all object values needed when the simulation is paused
     global cam_x, cam_y
     if selected_object >= 0:
-        cam_x = bodies[selected_object].x_pos * cam_zoom
-        cam_y = bodies[selected_object].y_pos * cam_zoom
+        for i in range(len(bodies)):
+            if bodies[i].index == selected_object:
+                cam_x = bodies[i].x_pos * cam_zoom
+                cam_y = bodies[i].y_pos * cam_zoom
     elif selected_object == -2:
         cam_x = ship.bod.x_pos * cam_zoom
         cam_y = ship.bod.y_pos * cam_zoom
@@ -357,6 +365,7 @@ while running:
                 else:
                     paused = True
                     timewarp = 'Paused'
+                    lines_to_draw = []
 
     keys = pygame.key.get_pressed()
     cam_move_dt = dt * precision / seconds_per_frame
